@@ -5,10 +5,8 @@
 ;♥*♥*♥*♥*♥*♥*♥*♥*♥*♥*♥*♥*♥*♥*♥*♥*♥*♥*♥*♥*♥*♥*♥*♥*
 ;************************************************
 
-    ; Win API stdcall
-
 ;************************************************
-;               section .libraryFunc
+;               section libraryFunc
 ;________________________________________________
 extern _GetStdHandle@4              ;kernel32.dll
 extern _WriteConsoleA@20            ;kernel32.dll
@@ -16,19 +14,20 @@ extern _WriteConsoleA@20            ;kernel32.dll
 
 
 ;************************************************
-;               section .globalFunc
+;               section globalFunc
 ;________________________________________________
 global _STLPrintf
 ;________________________________________________
 
 
 ;************************************************
-;               section .constants
+;               section constants
 ;________________________________________________
 BufferSize                      equ 50
 BufferReserveBeforeOverflow     equ 15
 BitMaskFirstBit                 equ 80000000h
 NStdHandle                      equ -11
+NewLine                         equ 10
 PrintfSpecifier                 equ '%'
 
 SpecifierLiteralPercentage      equ '%'
@@ -42,7 +41,7 @@ SpecifierHexRepresentation      equ 'x'
 
 
 ;************************************************
-;               section .functions
+;               section functions
 ;________________________________________________
 section .text
 
@@ -69,6 +68,9 @@ _STLPrintf:
         ; Save counter in buffer to ebx
         xor ebx, ebx
 
+        ; Number of warning 0
+        mov [IncorrectSpec], ebx
+
 .ProcessString:
 
         cmp ebx, BufferSize - BufferReserveBeforeOverflow
@@ -87,6 +89,7 @@ _STLPrintf:
         jmp .ProcessString
 
 .Exit:
+        call PrintWarning
         call PutsInConsole
 
         pop ebp
@@ -105,7 +108,8 @@ ProcessSpecifier:
 
         ; Check that it is a specifier
         cmp byte [ecx], PrintfSpecifier
-        jne .Exit           ; ///////
+        jne .Exit
+
         inc ecx
 
         ; Save specifier to dl
@@ -117,16 +121,24 @@ ProcessSpecifier:
         je .LiteralPercentage
 
         sub dl, 'a'
+        cmp dl, 0
+        jb .IncorrectSpecifier
+
+        cmp dl, 'z' - 'a'
+        ja .IncorrectSpecifier
+
         jmp [JmpTable + edx * 4]
 
 .LiteralPercentage:
         mov [ebx + buffer], dl
         inc ebx
+
         jmp .Exit
 
 .SingleCharacter:
         mov dl, [ebp]
         add ebp, 4
+
         jmp .LiteralPercentage
 
 .CharacterString:
@@ -138,10 +150,11 @@ ProcessSpecifier:
         call PutsInBuffer
 
         pop ecx
+
         jmp .Exit
 
 .SignedInteger:
-        mov eax, 10d
+        mov esi, 10d
 
         call PrintDecimalNumber
 
@@ -165,6 +178,11 @@ ProcessSpecifier:
         mov al,  4
 
         call PrintBinaryNumber
+
+        jmp .Exit
+
+.IncorrectSpecifier:
+        call IncorrectSpecifier
 
         jmp .Exit
 
@@ -231,7 +249,7 @@ PrintBinaryNumber:
 
 ; *********************************************
 ; Print decimal number to buffer
-; Entry: EAX - number system
+; Entry: ESI - number system
 ;        EBX - counter in buffer
 ;        EBP - ptr to arg in stack
 ; Exit:  None
@@ -240,9 +258,6 @@ PrintBinaryNumber:
 PrintDecimalNumber:
 
         push ecx
-
-        ; Save number system to esi
-        mov esi, eax
 
         ; Save number to eax
         mov eax, [ebp]
@@ -301,6 +316,71 @@ PutHexSymbolInBuffer:
 
         ret
 
+;**********************************************
+; Process incorrect specifier
+; Entry: ECX - ptr to fmt string
+; Exit:  None
+; Destr: EAX, EDX, EBP
+;**********************************************
+IncorrectSpecifier:
+
+        add ebp, 4
+
+        xor eax, eax
+        mov al, [IncorrectSpec]
+        inc al
+        mov [IncorrectSpec], al
+
+        add dl, 'a'
+        mov [IncorrectSpec + eax], dl
+
+        ret
+
+;**********************************************
+; Print warning message
+; Entry: ECX - ptr to fmt string
+; Exit:  None
+; Destr: EAX, ECX, EDX, ESI
+;**********************************************
+PrintWarning:
+
+        xor eax, eax
+        xor edx, edx
+        mov dl,  [IncorrectSpec]
+
+        cmp dl, 0
+        je .Exit
+
+        mov esi, 1
+
+.loop:
+        push edx
+
+        ; Print TextWarning
+        xor dh, dh
+        mov ecx, TextWarning
+        call PutsInBuffer
+
+        ; Print specifier
+        mov dl, [IncorrectSpec + esi]
+        mov [buffer + ebx], dl
+        inc esi
+        inc ebx
+
+        pop edx
+
+        dec dl
+        cmp dl, 0
+        jne .loop
+
+        mov [buffer + ebx], byte NewLine
+        mov [buffer + ebx + 1], byte NewLine
+        add ebx, 2
+
+.Exit:
+
+        ret
+
 ; *********************************************
 ; Puts to buffer before specifier or '\0'
 ; Entry: EBX - counter in buffer
@@ -337,7 +417,7 @@ PutsInBuffer:
 ; Puts in buffer to console
 ; Entry: EBX - counter in buffer
 ; Exit:  None
-; Destr: EAX, EBX, ECX, EDX, ESI, EDI
+; Destr: EAX, EBX, EDX, ESI, EDI
 ;**********************************************
 PutsInConsole:
 
@@ -383,15 +463,11 @@ PutsInConsole:
 ;**********************************************
 BufferOverflow:
 
-        push ecx
         push edx
 
         call PutsInConsole
 
         pop edx
-        pop ecx
-
-        xor ebx, ebx
 
         ret
 
@@ -399,27 +475,30 @@ BufferOverflow:
 
 
 ;************************************************
-;               section .data
+;               section data
 ;________________________________________________
 section .data
 HexSymbols      db "0123456789ABCDEF"
 buffer          db BufferSize DUP 0
+IncorrectSpec   db BufferSize DUP 0
+TextWarning     db NewLine, "Warning: Incorrect specifier %", 0
 ;________________________________________________
 
+
 ;************************************************
-;               section .JmpTable
+;               section JmpTable
 ;________________________________________________
 JmpTable:
-        dd      'b' - 'a' DUP 0
+        dd      'b' - 'a' DUP ProcessSpecifier.IncorrectSpecifier
         dd      ProcessSpecifier.ByteRepresentation      ;%b
         dd      ProcessSpecifier.SingleCharacter         ;%c
         dd      ProcessSpecifier.SignedInteger           ;%d
-        dd      'o' - 'd' - 1 DUP 0
+        dd      'o' - 'd' - 1 DUP ProcessSpecifier.IncorrectSpecifier
         dd      ProcessSpecifier.OctalRepresentation     ;%o
-        dd      's' - 'o' - 1 DUP 0
+        dd      's' - 'o' - 1 DUP ProcessSpecifier.IncorrectSpecifier
         dd      ProcessSpecifier.CharacterString         ;%s
-        dd      'x' - 's' - 1 DUP 0
+        dd      'x' - 's' - 1 DUP ProcessSpecifier.IncorrectSpecifier
         dd      ProcessSpecifier.HexRepresentation       ;%x
-        dd      'z' - 'x' DUP 0
+        dd      'z' - 'x' DUP ProcessSpecifier.IncorrectSpecifier
 ;________________________________________________
 
